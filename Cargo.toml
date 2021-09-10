@@ -1,0 +1,32 @@
+[package]
+name = "gpioirq"
+version = "0.1.0"
+authors = ["Camilo Zapata <camilo.zapata@nebulae.com.co>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+evdev = { version = "0.11.0", features= [ "tokio" ]}
+clap = { version = "2.33" }
+syslog = { version = "5" }
+log = { version = "0.4" } 
+
+
+[dependencies.tokio]
+version = "1"
+features = [
+  #"fs",
+  #"io-util",
+  #"io-std",
+  "macros",
+  #"net",
+  #"parking_lot",
+  "process",
+  "rt",
+  "rt-multi-thread",
+  "signal",
+  "sync",
+  "time",
+]
+
