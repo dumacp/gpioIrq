@@ -1,3 +1,4 @@
+pub mod gpiokey;
 pub mod logs;
 
 #[cfg(test)]

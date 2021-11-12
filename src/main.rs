@@ -1,16 +1,12 @@
-use gpioirq::logs;
 use clap::{App, Arg};
-use evdev::{Device, Key, InputEventKind};
+use evdev::{Device, InputEventKind, Key};
+use gpioirq::{gpiokey, logs};
+use log::{error, info, warn};
 use std::error::Error;
 use std::process::Command;
-use tokio::{
-    self,
-    sync::mpsc,
-};
-use syslog::{Facility, Formatter3164, BasicLogger};
-use log::{LevelFilter, info, warn};
+use tokio::{self, sync::mpsc, time};
 // use tokio::signal::unix::{signal, SignalKind};
-// use tokio::time::Duration;
+// use tokio::time::{sleep, Duration);
 
 const APPNAME: &'static str = "gpioIrq";
 
@@ -25,40 +21,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .short("f")
                 .long("filepath")
                 .value_name("filepath")
-                .help("file path of event device, example: /dev/input/event1")
-                .takes_value(true))
-        .arg(Arg::with_name("logStd")
+                .help("file path of event device, example: /dev/input/event0 (default)")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("logStd")
                 .short("l")
                 .long("logStd")
-                .help("set log to stdout"))
+                .help("set log to stdout"),
+        )
         .get_matches();
 
-    let filename: &str = args.value_of("filepath").unwrap_or("/dev/input/event1");
+    let filename: &str = args.value_of("filepath").unwrap_or("/dev/input/event0");
 
     let logstd = args.is_present("logStd");
-    let formatter = Formatter3164 {
-        facility: Facility::LOG_USER,
-        hostname: None,
-        process: APPNAME.to_owned(),
-        pid: 0,
-    };
 
-    if !logstd {
-        let logger = syslog::unix(formatter).expect("could not connect to syslog");
-        log::set_boxed_logger(Box::new(BasicLogger::new(logger)))
-                .map(|()| log::set_max_level(LevelFilter::Debug))?;
-    } else {
-        logs::init_std_log()?;
-    }
-    
+    logs::init_std_log(logstd, APPNAME)?;
 
     info!("filename: {}", filename);
     let device = Device::open(filename)?;
-
-    
-
-   
-
     device.supported_keys().map(|keys| {
         log::info!("key: {:?}", keys);
     });
@@ -71,17 +52,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
             match events.next_event().await {
                 Ok(ev) => {
                     if let Err(err) = tx.send(ev).await {
-                        println!("event err: {}", err);
+                        error!("event err: {}", err);
                         tx.closed().await;
-                        return()
+                        return ();
                     }
-                },
+                }
                 Err(err) => {
-                    println!("event err: {}", err);
-                    continue
-                },
+                    warn!("event err: {}", err);
+                    continue;
+                }
             };
-        } 
+        }
     });
 
     while let Some(result) = rx.recv().await {
@@ -95,39 +76,75 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     } else {
                         info!("BATTERY OFF");
                     }
-                },
+                }
                 Key::KEY_WAKEUP => {
                     if result.value() == 1 {
                         info!("IGNITION ON");
                     } else {
                         info!("IGNITION OFF");
                     }
-                },
+                }
                 Key::KEY_PROG1 => {
                     if result.value() == 0 {
                         warn!("KEY_PROG1 ON");
-                        Command::new("shutdown").
-                            arg("-h").arg("-t 2").
-                            spawn().
-                            expect("shutdown command failed");
+                        let _ = Command::new("systemctl")
+                            .arg("stop")
+                            .arg("appfare.service")
+                            .spawn()
+                            .map_err(|err| {
+                                warn!("shutdown appfare command failed, err: {}", err);
+                            });
+                        time::sleep(time::Duration::from_millis(1000)).await;
+                        let _ = Command::new("shutdown")
+                            .arg("-h")
+                            .arg("now")
+                            .spawn()
+                            .map_err(|err| {
+                                warn!("shutdown command failed, err: {}", err);
+                            });
                     } else {
                         info!("KEY_PROG1 OFF");
                     }
-                },
+                }
                 Key::KEY_PROG2 => {
                     if result.value() == 1 {
-                        log::info!("ADC alert ON");
+                        warn!("ADC alert ON");
+                        let _ = gpiokey::send_signal(
+                            "/sys/class/leds/power-pciusb/brightness",
+                            gpiokey::SIGNAL::ZERO,
+                        )
+                        .map_err(|err| {
+                            warn!(r#"shutdown "power-pciusb" command failed, err: {}"#, err);
+                        });
+                        let _ = gpiokey::send_signal(
+                            "/sys/class/leds/reset-usbh1/brightness",
+                            gpiokey::SIGNAL::ZERO,
+                        )
+                        .map_err(|err| {
+                            warn!(r#"shutdown "reset-usbh0" command failed, err: {}"#, err);
+                        });
                     } else {
-                        log::info!("ADC alert OFF");
+                        info!("ADC alert OFF");
+                        let _ = gpiokey::send_signal(
+                            "/sys/class/leds/reset-usbh1/brightness",
+                            gpiokey::SIGNAL::ONE,
+                        )
+                        .map_err(|err| {
+                            warn!(r#"shutdown "reset-usbh0" command failed, err: {}"#, err);
+                        });
+                        let _ = gpiokey::send_signal(
+                            "/sys/class/leds/power-pciusb/brightness",
+                            gpiokey::SIGNAL::ONE,
+                        )
+                        .map_err(|err| {
+                            warn!(r#"shutdown "power-pciusb" command failed, err: {}"#, err);
+                        });
                     }
-                },
-                _ => {},
+                }
+                _ => {}
             };
         };
-
-        
     }
 
     Ok(())
-    
 }
